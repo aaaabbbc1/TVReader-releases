@@ -1,0 +1,8 @@
+{
+  "name": "TV Reader",
+  "description": "Couch and remote-first Android TV and mobile e-reader supporting EPUB, FB2, PDF, TXT, MD, HTML, and CBZ with Project Gutenberg and Standard Ebooks.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
