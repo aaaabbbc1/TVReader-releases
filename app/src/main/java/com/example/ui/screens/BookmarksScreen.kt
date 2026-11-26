@@ -139,6 +139,15 @@ fun BookmarksScreen(
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
+                                    if (bm.label.isNotBlank()) {
+                                        Text(
+                                            text = bm.label,
+                                            style = MaterialTheme.typography.labelLarge,
+                                            color = TvColors.TextPrimary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
                                     Text(
                                         text = "${bm.chapterTitle} • Page ${bm.pageIndex + 1}",
                                         style = MaterialTheme.typography.labelLarge,

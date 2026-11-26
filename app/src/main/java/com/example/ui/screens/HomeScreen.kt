@@ -306,8 +306,13 @@ private fun ContinueReadingHeroCard(
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
+                    val spot = if (book.format == "PDF" || book.format == "CBZ") {
+                        "Page ${book.currentPageIndex + 1} of ${book.totalPagesEstimate}"
+                    } else {
+                        "Ch ${book.currentChapterIndex + 1} • Page ${book.currentPageIndex + 1}"
+                    }
                     Text(
-                        text = "${book.author} • ${book.format}",
+                        text = "${book.author} • ${book.format} • $spot",
                         style = MaterialTheme.typography.bodyMedium,
                         color = TvColors.TextSecondary,
                         maxLines = 1,
@@ -367,8 +372,13 @@ private fun ContinueReadingHeroCard(
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis
                         )
+                        val spot = if (book.format == "PDF" || book.format == "CBZ") {
+                            "Page ${book.currentPageIndex + 1}"
+                        } else {
+                            "Ch ${book.currentChapterIndex + 1} • Pg ${book.currentPageIndex + 1}"
+                        }
                         Text(
-                            text = "${book.author} • ${book.format}",
+                            text = "${book.author} • ${book.format} • $spot",
                             style = MaterialTheme.typography.bodyMedium,
                             color = TvColors.TextSecondary,
                             maxLines = 1,

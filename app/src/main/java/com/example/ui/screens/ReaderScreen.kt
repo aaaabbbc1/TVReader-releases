@@ -19,42 +19,34 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -79,11 +71,13 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.R
 import com.example.data.local.BookmarkEntity
 import com.example.data.model.BookFormat
@@ -96,7 +90,6 @@ import com.example.data.model.ReaderTheme
 import com.example.data.model.ReadingMode
 import com.example.data.parser.PdfAndCbzParser
 import com.example.ui.components.TvActionButton
-import com.example.ui.components.TvFocusCard
 import com.example.ui.theme.ReaderPalette
 import com.example.ui.theme.TvColors
 import com.example.ui.theme.resolveReaderPalette
@@ -104,6 +97,7 @@ import com.example.ui.theme.toComposeFontFamily
 import com.example.ui.viewmodel.ReaderUiState
 import com.example.ui.viewmodel.ReaderViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.withContext
 import kotlin.math.ceil
 
@@ -123,23 +117,56 @@ fun ReaderScreen(
 ) {
     val palette = resolveReaderPalette(settings.theme, settings.astigmaPreset)
     val readerFocusRequester = remember { FocusRequester() }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var livePageSnippet by remember { mutableStateOf("") }
 
-    LaunchedEffect(uiState.showToolbar, uiState.showTocDrawer, uiState.isLoading) {
-        if (!uiState.showToolbar && !uiState.showTocDrawer && !uiState.isLoading) {
+    val anyOverlayOpen = uiState.showToolbar ||
+        uiState.showTocDrawer ||
+        uiState.showBookmarksDrawer ||
+        uiState.showSettingsPanel ||
+        uiState.showPageJumpDialog
+
+    LaunchedEffect(anyOverlayOpen, uiState.isLoading) {
+        if (!anyOverlayOpen && !uiState.isLoading) {
             runCatching { readerFocusRequester.requestFocus() }
+        }
+    }
+
+    // Always persist reading position when leaving screen or backgrounding app
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP || event == Lifecycle.Event.ON_PAUSE) {
+                viewModel.saveProgressNow()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            viewModel.saveProgressNow()
         }
     }
 
     BackHandler {
         when {
-            uiState.showTocDrawer || uiState.showToolbar -> viewModel.closeOverlays()
-            else -> onExit()
+            uiState.showPageJumpDialog -> viewModel.closePageJumpDialog()
+            anyOverlayOpen -> viewModel.closeOverlays()
+            else -> {
+                viewModel.saveProgressNow()
+                onExit()
+            }
         }
     }
 
     val currentChapter = uiState.parsedBook?.chapters?.getOrNull(uiState.currentChapterIndex)
-    val currentSnippet = remember(uiState.currentChapterIndex, uiState.currentPageIndex, currentChapter) {
-        currentChapter?.rawText?.take(180) ?: uiState.book?.title.orEmpty()
+    val currentSnippet = remember(
+        uiState.currentChapterIndex,
+        uiState.currentPageIndex,
+        currentChapter,
+        livePageSnippet
+    ) {
+        livePageSnippet.ifBlank {
+            currentChapter?.rawText?.take(180) ?: uiState.book?.title.orEmpty()
+        }
     }
 
     Box(
@@ -150,12 +177,20 @@ fun ReaderScreen(
             .focusable()
             .onPreviewKeyEvent { keyEvent ->
                 if (keyEvent.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                if (uiState.showTocDrawer || uiState.showToolbar) {
+                if (uiState.showPageJumpDialog) {
+                    return@onPreviewKeyEvent false
+                }
+                if (anyOverlayOpen) {
                     if (keyEvent.key == Key.Back || keyEvent.key == Key.Escape || keyEvent.key == Key.Menu) {
                         viewModel.closeOverlays()
                         return@onPreviewKeyEvent true
                     }
                     return@onPreviewKeyEvent false
+                }
+                val digitChar = keyToDigitChar(keyEvent.key)
+                if (digitChar != null) {
+                    viewModel.openPageJumpDialog(digitChar.toString())
+                    return@onPreviewKeyEvent true
                 }
                 when (keyEvent.key) {
                     Key.DirectionRight, Key.NavigateNext -> {
@@ -222,9 +257,9 @@ fun ReaderScreen(
                 BoxWithConstraints(
                     modifier = Modifier
                         .fillMaxSize()
-                        .pointerInput(uiState.showToolbar, uiState.showTocDrawer) {
+                        .pointerInput(anyOverlayOpen) {
                             detectTapGestures { offset ->
-                                if (uiState.showTocDrawer || uiState.showToolbar) {
+                                if (anyOverlayOpen) {
                                     viewModel.closeOverlays()
                                 } else {
                                     val w = size.width.toFloat()
@@ -242,6 +277,7 @@ fun ReaderScreen(
 
                     when {
                         uiState.format == BookFormat.PDF -> {
+                            livePageSnippet = "Page ${uiState.currentPageIndex + 1} of ${parsed.pdfPageCount}"
                             PdfReaderCanvas(
                                 pdfPath = parsed.pdfFilePath.orEmpty(),
                                 pageIndex = uiState.currentPageIndex,
@@ -251,6 +287,7 @@ fun ReaderScreen(
                         }
                         uiState.format == BookFormat.CBZ -> {
                             val entryName = parsed.cbzImageEntries.getOrNull(uiState.currentPageIndex).orEmpty()
+                            livePageSnippet = "Page ${uiState.currentPageIndex + 1} of ${parsed.cbzImageEntries.size}"
                             CbzReaderCanvas(
                                 cbzPath = parsed.cbzFilePath.orEmpty(),
                                 entryName = entryName
@@ -271,8 +308,13 @@ fun ReaderScreen(
                             ContinuousChapterView(
                                 chapter = currentChapter,
                                 parsedBook = parsed,
+                                initialScrollBlockIndex = uiState.scrollBlockIndex,
                                 settings = settings,
                                 palette = palette,
+                                onScrollBlockChanged = { idx, snippet ->
+                                    if (snippet.isNotBlank()) livePageSnippet = snippet
+                                    viewModel.updateScrollBlock(idx)
+                                },
                                 modifier = Modifier
                                     .fillMaxSize()
                                     .padding(horizontal = hMargin, vertical = vMargin)
@@ -286,6 +328,7 @@ fun ReaderScreen(
                                 settings = settings,
                                 palette = palette,
                                 onPagesMeasured = { count -> viewModel.updatePaginationCount(count) },
+                                onVisibleSnippetChanged = { snippet -> livePageSnippet = snippet },
                                 modifier = Modifier
                                     .fillMaxSize()
                                     .padding(
@@ -298,7 +341,7 @@ fun ReaderScreen(
                         }
                     }
 
-                    // Bottom status indicator (hidden in Focus Mode, matching 03_reader.png)
+                    // Bottom status indicator (tappable to jump to page)
                     if (!settings.focusMode && !uiState.showToolbar) {
                         val footerText = buildFooterText(uiState, parsed, isPdfOrCbz)
                         Text(
@@ -307,6 +350,7 @@ fun ReaderScreen(
                             color = palette.textSecondary,
                             modifier = Modifier
                                 .align(Alignment.BottomEnd)
+                                .clickable { viewModel.openPageJumpDialog() }
                                 .padding(horizontal = 24.dp, vertical = 12.dp)
                                 .testTag("reader_footer_status")
                         )
@@ -315,8 +359,8 @@ fun ReaderScreen(
             }
         }
 
-        // Brightness dimming overlay
-        val dimAlpha = ((100 - settings.brightnessPercent).coerceIn(0, 85) / 100f) * 0.78f
+        // Brightness dimming overlay applied ONLY over the book itself (below overlays)
+        val dimAlpha = ((100 - settings.brightnessPercent).coerceIn(0, 95) / 100f) * 0.90f
         if (dimAlpha > 0.01f) {
             Box(
                 modifier = Modifier
@@ -325,30 +369,37 @@ fun ReaderScreen(
             )
         }
 
-        // Reader Toolbar Overlay (matching 04_reader_toolbar.png)
+        // Reader Toolbar Overlay
         AnimatedVisibility(
             visible = uiState.showToolbar,
             enter = fadeIn(),
             exit = fadeOut(),
             modifier = Modifier.align(Alignment.BottomCenter)
         ) {
-            val isBookmarked = bookmarks.any {
+            val hasBookmarkOnPage = bookmarks.any {
                 it.chapterIndex == uiState.currentChapterIndex && it.pageIndex == uiState.currentPageIndex
             }
             ReaderToolbarOverlay(
                 uiState = uiState,
                 snippet = currentSnippet,
-                isBookmarked = isBookmarked,
+                bookmarkCount = bookmarks.size,
+                hasBookmarkOnPage = hasBookmarkOnPage,
                 onSeekFraction = { viewModel.seekPercent(it) },
                 onDecreaseFont = { viewModel.adjustFontSize(-2) },
                 onIncreaseFont = { viewModel.adjustFontSize(2) },
+                onOpenPageJump = { viewModel.openPageJumpDialog() },
+                onOpenSettings = { viewModel.toggleSettingsPanel() },
                 onOpenToc = { viewModel.toggleTocDrawer() },
-                onToggleBookmark = { viewModel.toggleBookmark(currentSnippet) },
-                onExitReader = onExit
+                onAddBookmark = { viewModel.addBookmark(currentSnippet) },
+                onOpenBookmarks = { viewModel.toggleBookmarksDrawer() },
+                onExitReader = {
+                    viewModel.saveProgressNow()
+                    onExit()
+                }
             )
         }
 
-        // Table of Contents Side Drawer (matching 05_toc.png)
+        // Table of Contents Side Drawer
         AnimatedVisibility(
             visible = uiState.showTocDrawer,
             enter = slideInHorizontally { -it } + fadeIn(),
@@ -364,10 +415,66 @@ fun ReaderScreen(
             )
         }
 
-        // Brief toast indicator for bookmark toggle
+        // In-Reader Settings Panel (with live Book Brightness)
+        AnimatedVisibility(
+            visible = uiState.showSettingsPanel,
+            enter = slideInHorizontally { it } + fadeIn(),
+            exit = slideOutHorizontally { it } + fadeOut(),
+            modifier = Modifier.align(Alignment.CenterEnd)
+        ) {
+            InReaderSettingsPanel(
+                settings = settings,
+                onSetBrightness = { viewModel.setBrightness(it) },
+                onSetTheme = { viewModel.setTheme(it) },
+                onAdjustFontSize = { viewModel.adjustFontSize(it) },
+                onSetLineHeight = { viewModel.setLineHeight(it) },
+                onSetReadingMode = { viewModel.setReadingMode(it) },
+                onSetFocusMode = { viewModel.setFocusMode(it) },
+                onClose = { viewModel.closeOverlays() }
+            )
+        }
+
+        // Multiple Bookmarks Side Panel
+        AnimatedVisibility(
+            visible = uiState.showBookmarksDrawer,
+            enter = slideInHorizontally { it } + fadeIn(),
+            exit = slideOutHorizontally { it } + fadeOut(),
+            modifier = Modifier.align(Alignment.CenterEnd)
+        ) {
+            BookmarksSidePanel(
+                bookmarks = bookmarks,
+                currentChapterIndex = uiState.currentChapterIndex,
+                currentPageIndex = uiState.currentPageIndex,
+                onAddQuickBookmark = { viewModel.addBookmark(currentSnippet) },
+                onAddBookmarkWithLabel = { label -> viewModel.addBookmark(currentSnippet, label) },
+                onSelectBookmark = { bm -> viewModel.jumpToBookmark(bm) },
+                onDeleteBookmark = { id -> viewModel.deleteBookmark(id) },
+                onClose = { viewModel.closeOverlays() }
+            )
+        }
+
+        // D-pad Go-To-Page Dialog
+        if (uiState.showPageJumpDialog) {
+            val (pageNum, totalNum, _) = computeProgressNumbers(uiState, uiState.parsedBook)
+            val isTextFlow = uiState.format != BookFormat.PDF && uiState.format != BookFormat.CBZ
+            GoToPageDialog(
+                currentPage = pageNum,
+                totalPages = totalNum,
+                currentChapterIndex = uiState.currentChapterIndex,
+                chapterCount = uiState.parsedBook?.chapters?.size ?: 1,
+                isTextFlow = isTextFlow,
+                initialDigits = uiState.initialPageJumpDigits,
+                onJumpToPage = { pageIdx -> viewModel.jumpToPage(pageIdx) },
+                onPreviousChapter = { viewModel.previousChapter() },
+                onNextChapter = { viewModel.nextChapter() },
+                onDismiss = { viewModel.closePageJumpDialog() }
+            )
+        }
+
+        // Brief toast indicator
         if (uiState.statusToast != null) {
             LaunchedEffect(uiState.statusToast) {
-                kotlinx.coroutines.delay(1800)
+                kotlinx.coroutines.delay(2000)
                 viewModel.clearToast()
             }
             Surface(
@@ -377,6 +484,7 @@ fun ReaderScreen(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .padding(top = 24.dp)
+                    .testTag("reader_status_toast")
             ) {
                 Text(
                     text = uiState.statusToast,
@@ -397,6 +505,7 @@ private fun PaginatedChapterView(
     settings: ReaderSettings,
     palette: ReaderPalette,
     onPagesMeasured: (Int) -> Unit,
+    onVisibleSnippetChanged: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     if (chapter == null) return
@@ -430,6 +539,14 @@ private fun PaginatedChapterView(
         }
 
         val currentSlice = pages.getOrNull(pageIndex.coerceIn(0, (pages.size - 1).coerceAtLeast(0)))
+
+        LaunchedEffect(currentSlice) {
+            val snippet = currentSlice?.content?.text?.trim()?.replace(Regex("\\s+"), " ")?.take(180).orEmpty()
+            if (snippet.isNotBlank()) {
+                onVisibleSnippetChanged(snippet)
+            }
+        }
+
         if (currentSlice != null) {
             Column(
                 modifier = Modifier.fillMaxSize(),
@@ -564,13 +681,40 @@ private fun paginateChapterBlocks(
 private fun ContinuousChapterView(
     chapter: ChapterContent?,
     parsedBook: ParsedBook,
+    initialScrollBlockIndex: Int,
     settings: ReaderSettings,
     palette: ReaderPalette,
+    onScrollBlockChanged: (Int, String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     if (chapter == null) return
     val fontFamily = settings.fontFamily.toComposeFontFamily()
+    val safeInitial = initialScrollBlockIndex.coerceIn(0, (chapter.blocks.size - 1).coerceAtLeast(0))
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = safeInitial)
+
+    LaunchedEffect(chapter.index, safeInitial) {
+        if (listState.firstVisibleItemIndex != safeInitial && safeInitial > 0) {
+            listState.scrollToItem(safeInitial)
+        }
+    }
+
+    LaunchedEffect(listState, chapter.blocks) {
+        snapshotFlow { listState.firstVisibleItemIndex }
+            .distinctUntilChanged()
+            .collect { idx ->
+                val block = chapter.blocks.getOrNull(idx)
+                val snippet = when (block) {
+                    is ContentBlock.Heading -> block.text
+                    is ContentBlock.Paragraph -> block.text
+                    is ContentBlock.ImageBlock -> block.caption
+                    else -> ""
+                }.take(180)
+                onScrollBlockChanged(idx, snippet)
+            }
+    }
+
     LazyColumn(
+        state = listState,
         modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(14.dp),
         contentPadding = PaddingValues(bottom = 40.dp)
@@ -757,258 +901,6 @@ private fun CbzReaderCanvas(
                 contentScale = ContentScale.Fit,
                 modifier = Modifier.fillMaxSize()
             )
-        }
-    }
-}
-
-@Composable
-private fun ReaderToolbarOverlay(
-    uiState: ReaderUiState,
-    snippet: String,
-    isBookmarked: Boolean,
-    onSeekFraction: (Float) -> Unit,
-    onDecreaseFont: () -> Unit,
-    onIncreaseFont: () -> Unit,
-    onOpenToc: () -> Unit,
-    onToggleBookmark: () -> Unit,
-    onExitReader: () -> Unit
-) {
-    val parsed = uiState.parsedBook
-    val (pageNum, totalNum, pct) = computeProgressNumbers(uiState, parsed)
-
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 24.dp, vertical = 18.dp),
-        shape = RoundedCornerShape(18.dp),
-        color = Color(0xFF0A0B0E).copy(alpha = 0.94f),
-        border = BorderStroke(1.dp, TvColors.BorderSubtle)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 24.dp, vertical = 18.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            // Snippet box matching 04_reader_toolbar.png
-            Surface(
-                shape = RoundedCornerShape(10.dp),
-                color = TvColors.Surface,
-                border = BorderStroke(1.dp, TvColors.BorderSubtle),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(
-                    text = snippet.ifBlank { uiState.book?.title.orEmpty() },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = TvColors.TextSecondary,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(12.dp)
-                )
-            }
-
-            // Progress Slider
-            Slider(
-                value = (pct / 100f).coerceIn(0f, 1f),
-                onValueChange = onSeekFraction,
-                colors = SliderDefaults.colors(
-                    thumbColor = TvColors.PrimaryTextAccent,
-                    activeTrackColor = TvColors.PrimaryBright,
-                    inactiveTrackColor = TvColors.BorderSubtle
-                ),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("reader_seek_slider")
-            )
-
-            // Title + page/total + %
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = uiState.book?.title?.uppercase().orEmpty(),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = TvColors.TextPrimary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
-                )
-                Spacer(Modifier.width(12.dp))
-                Text(
-                    text = "$pageNum/$totalNum   $pct%",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = TvColors.PrimaryTextAccent
-                )
-            }
-
-            // Controls row: Back | A- Aa A+ | TOC | Bookmark
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    TvActionButton(
-                        text = "",
-                        icon = Icons.AutoMirrored.Filled.ArrowBack,
-                        filled = false,
-                        onClick = onExitReader,
-                        tag = "reader_exit_button"
-                    )
-                    TvActionButton(
-                        text = "A−",
-                        filled = true,
-                        onClick = onDecreaseFont,
-                        tag = "reader_font_minus_button"
-                    )
-                    Text(
-                        text = "Aa",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = TvColors.TextSecondary
-                    )
-                    TvActionButton(
-                        text = "A+",
-                        filled = true,
-                        onClick = onIncreaseFont,
-                        tag = "reader_font_plus_button"
-                    )
-                }
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    TvActionButton(
-                        text = "",
-                        icon = Icons.AutoMirrored.Filled.FormatListBulleted,
-                        filled = true,
-                        onClick = onOpenToc,
-                        tag = "reader_toc_button"
-                    )
-                    TvActionButton(
-                        text = "",
-                        icon = if (isBookmarked) Icons.Default.Star else Icons.Default.StarBorder,
-                        filled = true,
-                        onClick = onToggleBookmark,
-                        tag = "reader_bookmark_button"
-                    )
-                }
-            }
-
-            Text(
-                text = stringResource(R.string.reader_dpad_legend),
-                fontSize = 12.sp,
-                color = TvColors.TextMuted,
-                modifier = Modifier.align(Alignment.CenterHorizontally)
-            )
-        }
-    }
-}
-
-@Composable
-private fun TocSidePanel(
-    chapters: List<ChapterContent>,
-    currentChapterIndex: Int,
-    alternativeLayout: Boolean,
-    onToggleAlternativeLayout: () -> Unit,
-    onSelectChapter: (Int) -> Unit
-) {
-    Surface(
-        modifier = Modifier
-            .widthIn(min = 260.dp, max = 380.dp)
-            .fillMaxHeight()
-            .padding(16.dp),
-        shape = RoundedCornerShape(18.dp),
-        color = Color(0xFF141519).copy(alpha = 0.97f),
-        border = BorderStroke(1.dp, TvColors.BorderSubtle)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Text(
-                text = stringResource(R.string.contents_title),
-                style = MaterialTheme.typography.headlineMedium,
-                color = TvColors.TextPrimary
-            )
-            TvActionButton(
-                text = if (alternativeLayout) stringResource(R.string.standard_layout)
-                else stringResource(R.string.alternative_layout),
-                filled = true,
-                onClick = onToggleAlternativeLayout,
-                modifier = Modifier.fillMaxWidth(),
-                tag = "toc_alternative_layout_button"
-            )
-            HorizontalDivider(color = TvColors.BorderSubtle)
-
-            if (chapters.isEmpty()) {
-                Text(
-                    text = "No table of contents entries.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = TvColors.TextSecondary
-                )
-            } else {
-                LazyColumn(
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    itemsIndexed(chapters) { index, ch ->
-                        val isCurrent = index == currentChapterIndex
-                        TvFocusCard(
-                            onClick = { onSelectChapter(index) },
-                            selected = isCurrent,
-                            containerColor = Color.Transparent,
-                            padding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
-                            tag = "toc_chapter_$index"
-                        ) {
-                            Text(
-                                text = ch.title,
-                                style = MaterialTheme.typography.titleMedium,
-                                color = if (isCurrent) TvColors.PrimaryTextAccent else TvColors.TextPrimary,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-private fun computeProgressNumbers(
-    uiState: ReaderUiState,
-    parsed: ParsedBook?
-): Triple<Int, Int, Int> {
-    if (parsed == null) return Triple(1, 1, 0)
-    return when (uiState.format) {
-        BookFormat.PDF -> {
-            val total = parsed.pdfPageCount.coerceAtLeast(1)
-            val page = (uiState.currentPageIndex + 1).coerceIn(1, total)
-            val pct = ((page.toFloat() / total) * 100f).toInt().coerceIn(1, 100)
-            Triple(page, total, pct)
-        }
-        BookFormat.CBZ -> {
-            val total = parsed.cbzImageEntries.size.coerceAtLeast(1)
-            val page = (uiState.currentPageIndex + 1).coerceIn(1, total)
-            val pct = ((page.toFloat() / total) * 100f).toInt().coerceIn(1, 100)
-            Triple(page, total, pct)
-        }
-        else -> {
-            val total = uiState.totalPagesInChapter.coerceAtLeast(1)
-            val page = (uiState.currentPageIndex + 1).coerceIn(1, total)
-            val totalCh = parsed.chapters.size.coerceAtLeast(1)
-            val chFrac = uiState.currentChapterIndex.toFloat() / totalCh
-            val pageFrac = (page.toFloat() / total) / totalCh
-            val pct = ((chFrac + pageFrac) * 100f).toInt().coerceIn(1, 100)
-            Triple(page, total, pct)
         }
     }
 }

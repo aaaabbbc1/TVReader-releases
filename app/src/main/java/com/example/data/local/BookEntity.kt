@@ -14,6 +14,7 @@ data class BookEntity(
     val format: String,
     val currentChapterIndex: Int = 0,
     val currentPageIndex: Int = 0,
+    val scrollBlockIndex: Int = 0,
     val totalPagesEstimate: Int = 1,
     val progressPercent: Int = 0,
     val dateAdded: Long = System.currentTimeMillis(),

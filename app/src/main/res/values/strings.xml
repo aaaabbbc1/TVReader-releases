@@ -29,8 +29,14 @@
     <string name="about_send_feedback">Send Feedback</string>
     <string name="about_features_whats_new">Features &amp; What\'s New</string>
 
-    <string name="reader_dpad_legend">◀ ▶ page   CH+/- chapter   ▲ ▼ seek   ↔ buttons   OK confirm   ← back</string>
+    <string name="reader_dpad_legend">◀ ▶ page   CH+/- chapter   ▲ ▼ seek   0-9 / OK menu   ← back</string>
     <string name="contents_title">Contents</string>
     <string name="alternative_layout">Alternative layout</string>
     <string name="standard_layout">Standard layout</string>
+    <string name="reader_settings_title">Reader Settings</string>
+    <string name="book_brightness_label">Book Brightness</string>
+    <string name="go_to_page_title">Go to Page</string>
+    <string name="bookmarks_panel_title">Bookmarks</string>
+    <string name="add_bookmark_action">Add Bookmark</string>
+    <string name="add_bookmark_with_note">Add with Note</string>
 </resources>

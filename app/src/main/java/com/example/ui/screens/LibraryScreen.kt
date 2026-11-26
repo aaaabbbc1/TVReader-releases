@@ -338,8 +338,13 @@ private fun LibraryBookGridItem(
                             .background(TvColors.FocusContainer, RoundedCornerShape(4.dp))
                             .padding(horizontal = 6.dp, vertical = 2.dp)
                     )
+                    val spotText = if (book.lastOpened > 0L) {
+                        "Pg ${book.currentPageIndex + 1} • ${book.progressPercent}%"
+                    } else {
+                        "${book.progressPercent}%"
+                    }
                     Text(
-                        text = "${book.progressPercent}%",
+                        text = spotText,
                         fontSize = 12.sp,
                         color = TvColors.TextSecondary
                     )

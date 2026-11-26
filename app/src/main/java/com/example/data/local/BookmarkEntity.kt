@@ -12,5 +12,6 @@ data class BookmarkEntity(
     val chapterTitle: String,
     val pageIndex: Int,
     val snippet: String,
+    val label: String = "",
     val createdAt: Long = System.currentTimeMillis()
 )

@@ -27,6 +27,7 @@ import com.example.data.parser.BookParser
 import com.example.data.remote.NetworkFileClient
 import com.example.data.remote.OnlineLibraryService
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -160,17 +161,23 @@ class BookRepository(private val context: Context) {
         bookId: Long,
         chapterIndex: Int,
         pageIndex: Int,
+        scrollBlockIndex: Int = 0,
         totalPages: Int,
         progressPercent: Int
-    ) {
+    ) = withContext(NonCancellable + Dispatchers.IO) {
         bookDao.updateProgress(
             bookId = bookId,
             chapterIndex = chapterIndex,
             pageIndex = pageIndex,
+            scrollBlockIndex = scrollBlockIndex.coerceAtLeast(0),
             totalPages = totalPages.coerceAtLeast(1),
             progressPercent = progressPercent.coerceIn(0, 100),
             lastOpened = System.currentTimeMillis()
         )
+    }
+
+    suspend fun touchBookLastOpened(bookId: Long) = withContext(NonCancellable + Dispatchers.IO) {
+        bookDao.touchLastOpened(bookId = bookId, lastOpened = System.currentTimeMillis())
     }
 
     suspend fun deleteBook(book: BookEntity) = withContext(Dispatchers.IO) {
@@ -185,6 +192,27 @@ class BookRepository(private val context: Context) {
         Unit
     }
 
+    suspend fun addBookmark(
+        book: BookEntity,
+        chapterIndex: Int,
+        chapterTitle: String,
+        pageIndex: Int,
+        snippet: String,
+        label: String = ""
+    ): Long {
+        return bookmarkDao.insertBookmark(
+            BookmarkEntity(
+                bookId = book.id,
+                bookTitle = book.title,
+                chapterIndex = chapterIndex,
+                chapterTitle = chapterTitle,
+                pageIndex = pageIndex,
+                snippet = snippet.take(180),
+                label = label.trim()
+            )
+        )
+    }
+
     suspend fun toggleBookmark(
         book: BookEntity,
         chapterIndex: Int,
@@ -197,16 +225,7 @@ class BookRepository(private val context: Context) {
             bookmarkDao.deleteBookmarkById(existing.id)
             false
         } else {
-            bookmarkDao.insertBookmark(
-                BookmarkEntity(
-                    bookId = book.id,
-                    bookTitle = book.title,
-                    chapterIndex = chapterIndex,
-                    chapterTitle = chapterTitle,
-                    pageIndex = pageIndex,
-                    snippet = snippet.take(180)
-                )
-            )
+            addBookmark(book, chapterIndex, chapterTitle, pageIndex, snippet)
             true
         }
     }

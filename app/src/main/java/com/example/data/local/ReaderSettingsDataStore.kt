@@ -58,7 +58,7 @@ class ReaderSettingsDataStore(private val context: Context) {
             pdfPageMode = prefs[Keys.PDF_PAGE_MODE]?.let {
                 runCatching { PdfPageMode.valueOf(it) }.getOrNull()
             } ?: PdfPageMode.ORIGINAL,
-            brightnessPercent = (prefs[Keys.BRIGHTNESS_PERCENT] ?: 80).coerceIn(15, 100),
+            brightnessPercent = (prefs[Keys.BRIGHTNESS_PERCENT] ?: 80).coerceIn(5, 100),
             keepScreenOn = prefs[Keys.KEEP_SCREEN_ON] ?: true
         )
     }
@@ -100,7 +100,7 @@ class ReaderSettingsDataStore(private val context: Context) {
     }
 
     suspend fun setBrightness(percent: Int) {
-        context.readerSettingsStore.edit { it[Keys.BRIGHTNESS_PERCENT] = percent.coerceIn(15, 100) }
+        context.readerSettingsStore.edit { it[Keys.BRIGHTNESS_PERCENT] = percent.coerceIn(5, 100) }
     }
 
     suspend fun setKeepScreenOn(enabled: Boolean) {

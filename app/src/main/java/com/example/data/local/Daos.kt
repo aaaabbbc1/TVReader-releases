@@ -35,6 +35,7 @@ interface BookDao {
         UPDATE books
         SET currentChapterIndex = :chapterIndex,
             currentPageIndex = :pageIndex,
+            scrollBlockIndex = :scrollBlockIndex,
             totalPagesEstimate = :totalPages,
             progressPercent = :progressPercent,
             lastOpened = :lastOpened
@@ -45,10 +46,14 @@ interface BookDao {
         bookId: Long,
         chapterIndex: Int,
         pageIndex: Int,
+        scrollBlockIndex: Int,
         totalPages: Int,
         progressPercent: Int,
         lastOpened: Long
     )
+
+    @Query("UPDATE books SET lastOpened = :lastOpened WHERE id = :bookId")
+    suspend fun touchLastOpened(bookId: Long, lastOpened: Long)
 
     @Query("DELETE FROM books WHERE id = :bookId")
     suspend fun deleteBookById(bookId: Long)
